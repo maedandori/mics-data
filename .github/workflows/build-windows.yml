@@ -53,4 +53,4 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: pwsh
         run: |
-          gh release create "v0.2.7" target/release/mics-data.exe target/release/mics-data.exe.sha256 --target "${{ github.sha }}" --title "v0.2.7" --notes "Add CAUSE catalog and identify event-table stop-reason field"
+          gh release create "v0.3.0" target/release/mics-data.exe target/release/mics-data.exe.sha256 --target "${{ github.sha }}" --title "v0.3.0" --notes "Add KANAGATA-style live Firebird machine dashboard"
