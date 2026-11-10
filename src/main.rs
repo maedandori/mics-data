@@ -26,6 +26,8 @@ struct Settings {
     port: String,
     database: String,
     user: String,
+    #[serde(default)]
+    sync_url: String,
 }
 
 impl Settings {
@@ -61,6 +63,7 @@ impl Settings {
                     "port" => cfg.port = value,
                     "database" => cfg.database = value,
                     "user" => cfg.user = value,
+                    "sync_url" => cfg.sync_url = value,
                     // Password is deliberately not loaded or stored in plain text.
                     _ => {}
                 }
@@ -91,14 +94,15 @@ impl Settings {
             ("port", &self.port),
             ("database", &self.database),
             ("user", &self.user),
+            ("sync_url", &self.sync_url),
         ] {
             if val.contains('\r') || val.contains('\n') {
                 return Err(format!("Invalid newline in {key}"));
             }
         }
         let content = format!(
-            "; MICS Data portable configuration (UTF-8)\n; Password is never written to disk.\n[firebird]\nhost={}\nport={}\ndatabase={}\nuser={}\n",
-            self.host, self.port, self.database, self.user,
+            "; MICS Data portable configuration (UTF-8)\n; Password is never written to disk.\n[firebird]\nhost={}\nport={}\ndatabase={}\nuser={}\nsync_url={}\n",
+            self.host, self.port, self.database, self.user, self.sync_url,
         );
         // A fresh sidecar file in the EXE folder, not the previous AppData path.
         // Fail visibly when this folder is read-only.
@@ -126,6 +130,7 @@ struct Asset {
 enum Event {
     Db(Result<Vec<String>, String>),
     Dashboard(Result<Vec<MachineNode>, String>),
+    SyncResult { digest: String, result: Result<(), String> },
     UpdateStatus(String),
     UpdateReady { version: String, staged: PathBuf },
 }
@@ -142,6 +147,8 @@ struct MachineNode {
     good: String,
     bad: String,
     staff: String,
+    planned: String,
+    cycle: String,
 }
 impl MachineNode {
     fn state(&self) -> &'static str {
@@ -167,6 +174,9 @@ struct MicsApp {
     node_last_update: Option<Instant>,
     show_setup: bool,
     selected_machine: Option<String>,
+    last_synced_digest: String,
+    sync_in_flight: bool,
+    sync_status: String,
     selected: String,
     busy: bool,
     updating: bool,
@@ -188,6 +198,9 @@ impl MicsApp {
             node_last_update: None,
             show_setup: true,
             selected_machine: None,
+            last_synced_digest: String::new(),
+            sync_in_flight: false,
+            sync_status: "Cloudflare: chưa đồng bộ".into(),
             selected: String::new(),
             busy: false,
             updating: false,
@@ -274,8 +287,34 @@ impl MicsApp {
                             self.status = format!("Đã tải {} máy trực tiếp từ Firebird.", nodes.len());
                             self.node_last_update = Some(Instant::now());
                             self.nodes = nodes;
+                            if !self.sync_in_flight && !self.settings.sync_url.is_empty() {
+                                let digest = format!("{:x}", Sha256::digest(
+                                    serde_json::to_vec(&self.nodes.iter().map(|n| {
+                                        (&n.machine,&n.order,&n.status,&n.product,&n.tool_no,&n.tool_name,
+                                         &n.good,&n.bad,&n.planned,&n.cycle,&n.staff)
+                                    }).collect::<Vec<_>>()).unwrap_or_default()
+                                ));
+                                if digest != self.last_synced_digest {
+                                    self.sync_in_flight = true;
+                                    let cfg = self.settings.clone();
+                                    let payload = self.nodes.clone();
+                                    let tx = self.tx.clone();
+                                    let digest_for_task = digest.clone();
+                                    thread::spawn(move || {
+                                        let result = send_mics_snapshot(&cfg, &payload);
+                                        let _ = tx.send(Event::SyncResult { digest:digest_for_task, result });
+                                    });
+                                }
+                            }
                         }
                         Err(error) => self.status = format!("Lỗi tải dashboard: {error}"),
+                    }
+                }
+                Event::SyncResult {digest,result} => {
+                    self.sync_in_flight=false;
+                    match result {
+                        Ok(()) => { self.last_synced_digest=digest;self.sync_status="Cloudflare D1: đồng bộ thành công".into(); }
+                        Err(e) => self.sync_status=format!("Cloudflare: {e}"),
                     }
                 }
                 Event::Db(result) => {
@@ -402,7 +441,9 @@ fn query_db(cfg: &Settings, password: &str, op: DbOperation) -> Result<Vec<Strin
                         COALESCE(TRIM(CAST(T.TOOLNO AS VARCHAR(80))), ''), \
                         COALESCE(TRIM(CAST(T.TOOLNAME AS VARCHAR(255))), ''), \
                         COALESCE(TRIM(CAST(W.TOTALQTYOK AS VARCHAR(24))), ''), \
-                        COALESCE(TRIM(CAST(W.STAFFNAME AS VARCHAR(100))), '') \
+                        COALESCE(TRIM(CAST(W.STAFFNAME AS VARCHAR(100))), ''), \
+                COALESCE(TRIM(CAST(W.QTYPLAN AS VARCHAR(24))), ''), \
+                COALESCE(TRIM(CAST(W.REALCYCLETIME AS VARCHAR(24))), '') \
                  FROM MACHINEWORK W \
                  LEFT JOIN SCHEDULE S ON S.MORDERNO = W.MORDERNO \
                     AND S.MACHINENO = W.MACHINENO \
@@ -500,7 +541,7 @@ fn query_machine_nodes(cfg: &Settings, password: &str) -> Result<Vec<MachineNode
     // MACHINEWORK is a current-state snapshot: one row per machine.
     // Match production order AND machine ID to avoid mixing scheduled molds.
     // The data does not currently expose which CAUSE entry is active.
-    let rows: Vec<(String,String,String,String,String,String,String,String,String)> = conn.query(
+    let rows: Vec<(String,String,String,String,String,String,String,String,String,String,String)> = conn.query(
         "SELECT TRIM(CAST(W.MACHINENO AS VARCHAR(24))), \
                 COALESCE(TRIM(CAST(W.MORDERNO AS VARCHAR(40))), ''), \
                 COALESCE(TRIM(CAST(W.STATUS AS VARCHAR(16))), ''), \
@@ -521,7 +562,7 @@ fn query_machine_nodes(cfg: &Settings, password: &str) -> Result<Vec<MachineNode
     // Some schedules may contain multiple records for the same order.
     // Keep only one node per machine and mark conflicting records as unknown.
     let mut nodes: Vec<MachineNode> = Vec::new();
-    for (machine, order, status, product, tool_no, tool_name, good, bad, staff) in rows {
+    for (machine, order, status, product, tool_no, tool_name, good, bad, staff, planned, cycle) in rows {
         if let Some(existing) = nodes.iter_mut().find(|n| n.machine == machine) {
             if existing.order != order || existing.tool_name != tool_name {
                 existing.status = "AMBIGUOUS".into();
@@ -529,10 +570,46 @@ fn query_machine_nodes(cfg: &Settings, password: &str) -> Result<Vec<MachineNode
             }
             continue;
         }
-        nodes.push(MachineNode { machine, order, status, product, tool_no, tool_name, good, bad, staff });
+        nodes.push(MachineNode { machine, order, status, product, tool_no, tool_name, good, bad, staff, planned, cycle });
     }
     nodes.sort_by_key(|n| n.machine.parse::<u32>().unwrap_or(u32::MAX));
     Ok(nodes)
+}
+
+
+fn send_mics_snapshot(cfg: &Settings, nodes: &[MachineNode]) -> Result<(), String> {
+    let token = std::env::var("MICS_SYNC_TOKEN")
+        .map_err(|_| "MICS_SYNC_TOKEN chưa cấu hình trên Windows".to_owned())?;
+    if token.is_empty() {return Err("Sync token rỗng".into());}
+    if !cfg.sync_url.starts_with("https://") {
+        return Err("sync_url phải bắt đầu bằng https://".into());
+    }
+    let parse_qty = |v: &str| -> i64 { v.trim().parse::<i64>().unwrap_or(0).max(0) };
+    let machines: Vec<serde_json::Value> = nodes.iter().map(|n| {
+        let qty_plan=parse_qty(&n.planned);
+        let qty_ok=parse_qty(&n.good);
+        serde_json::json!({
+            "machine_no":n.machine.parse::<i32>().unwrap_or(0),
+            "order_no":n.order,"status_code":n.status,
+            "product_name":n.product,"mold_no":n.tool_no,"mold_name":n.tool_name,
+            "qty_plan":qty_plan,"qty_ok":qty_ok,"qty_ng":parse_qty(&n.bad),
+            "qty_remaining":(qty_plan-qty_ok).max(0),
+            "cycle_seconds":n.cycle.trim().parse::<f64>().ok(),
+            "staff_name":n.staff
+        })
+    }).collect();
+    let payload=serde_json::json!({
+        "source":"mics-data",
+        "sampled_at":chrono::Utc::now().to_rfc3339(),
+        "machines":machines
+    });
+    let response=ureq::AgentBuilder::new().timeout(Duration::from_secs(20)).build()
+        .post(&cfg.sync_url)
+        .set("Authorization",&format!("Bearer {token}"))
+        .set("Content-Type","application/json")
+        .send_json(payload).map_err(|e| format!("HTTP sync: {e}"))?;
+    if response.status()!=200 {return Err(format!("HTTP {}",response.status()));}
+    Ok(())
 }
 
 fn http_get(url: &str) -> Result<Vec<u8>, String> {
@@ -688,6 +765,7 @@ impl eframe::App for MicsApp {
                 }
             });
             ui.label(&self.status);
+            ui.small(&self.sync_status);
             ui.separator();
             egui::ScrollArea::vertical().max_height(if self.show_setup { 220.0 } else { 500.0 }).show(ui, |ui| {
                 if self.nodes.is_empty() {
@@ -749,7 +827,12 @@ impl eframe::App for MicsApp {
                 ui.label("Password");
                 ui.add(egui::TextEdit::singleline(&mut self.password).password(true)); ui.end_row();
             });
-            ui.label("Cấu hình: setting.ini (cùng thư mục EXE). Mật khẩu không ghi ra file.");
+            ui.label("Cấu hình: setting.ini (cùng thư mục EXE). Mật khẩu và sync token không ghi vào file.");
+            ui.horizontal(|ui|{
+                ui.label("Cloudflare sync URL");
+                ui.text_edit_singleline(&mut self.settings.sync_url);
+            });
+            ui.small("Token đặt trong biến môi trường Windows MICS_SYNC_TOKEN; Worker secret MICS_SYNC_TOKEN phải giống nhau.");
             ui.horizontal(|ui| {
                 if ui.button("Lưu cấu hình").clicked() {
                     self.status = match self.settings.save() {
