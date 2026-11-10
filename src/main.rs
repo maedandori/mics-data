@@ -246,7 +246,7 @@ impl MicsApp {
 }
 
 #[derive(Clone)]
-enum DbOperation { Test, Tables, Columns(String), Count(String), ScheduleNow, ToolColumns }
+enum DbOperation { Test, Tables, Columns(String), Count(String), ScheduleNow, ToolColumns, MachineWork }
 
 fn query_db(cfg: &Settings, password: &str, op: DbOperation) -> Result<Vec<String>, String> {
     let port: u16 = cfg.port.parse().map_err(|_| "Invalid TCP port".to_string())?;
@@ -282,6 +282,45 @@ fn query_db(cfg: &Settings, password: &str, op: DbOperation) -> Result<Vec<Strin
             ).map_err(|e| e.to_string())?;
             if rows.is_empty() { return Err("Table not found".into()); }
             Ok(rows.into_iter().map(|(name, position)| format!("{}: {name}", position+1)).collect())
+        }
+        DbOperation::MachineWork => {
+            // MACHINEWORK is the expected table name based on the export filename.
+            // If the database uses a different name the query will report an error.
+            // The live production order must match BOTH machine and order number:
+            // never infer actual production from MACHINESEQ alone.
+            let rows: Vec<(String, String, String, String, String, String, String, String, String)> = conn.query(
+                "SELECT TRIM(CAST(W.MACHINENO AS VARCHAR(24))), \
+                        COALESCE(TRIM(CAST(W.MORDERNO AS VARCHAR(40))), ''), \
+                        COALESCE(TRIM(CAST(W.STATUS AS VARCHAR(16))), ''), \
+                        COALESCE(TRIM(CAST(S.PARTSNAME AS VARCHAR(255))), ''), \
+                        COALESCE(TRIM(CAST(S.TOOLENTRYNO AS VARCHAR(24))), ''), \
+                        COALESCE(TRIM(CAST(T.TOOLNO AS VARCHAR(80))), ''), \
+                        COALESCE(TRIM(CAST(T.TOOLNAME AS VARCHAR(255))), ''), \
+                        COALESCE(TRIM(CAST(W.TOTALQTYOK AS VARCHAR(24))), ''), \
+                        COALESCE(TRIM(CAST(W.STAFFNAME AS VARCHAR(100))), '') \
+                 FROM MACHINEWORK W \
+                 LEFT JOIN SCHEDULE S ON S.MORDERNO = W.MORDERNO \
+                    AND S.MACHINENO = W.MACHINENO \
+                    AND COALESCE(S.DELETEFLG, 0) = 0 \
+                 LEFT JOIN TOOL T ON T.ENTRYNO = S.TOOLENTRYNO \
+                 WHERE W.MACHINENO IN (5,6,7,8,10,11,12,13,14,15,16,17,18,19) \
+                 ORDER BY W.MACHINENO", ()
+            ).map_err(|e| format!("MACHINEWORK query failed (verify actual table name): {e}"))?;
+            let mut out = vec![
+                format!("MACHINEWORK → SCHEDULE → TOOL: {} dòng", rows.len()),
+                "Mã 200,420: hoạt động theo mẫu được xác nhận; 450: dừng (lý do không có trong các cột đã biết).".into(),
+                "MÁY | TÌNH TRẠNG | TÊN KHUÔN | MÃ KHUÔN | SẢN PHẨM | LỆNH SX | OK | NHÂN VIÊN".into(),
+            ];
+            out.extend(rows.into_iter().map(|(machine, order, status, product, _entry, tool_no, tool_name, qty_ok, staff)| {
+                let state = match status.as_str() {
+                    "200" | "420" => "ĐANG CHẠY (theo mã đã đối chiếu)",
+                    "450" => "DỪNG (chưa rõ lý do từ DB)",
+                    _ => "CHƯA XÁC ĐỊNH",
+                };
+                let mold = if tool_name.is_empty() { "(chưa ghép được khuôn)" } else { &tool_name };
+                format!("{machine} | {state} [{status}] | {mold} | {tool_no} | {product} | {order} | {qty_ok} | {staff}")
+            }));
+            Ok(out)
         }
         DbOperation::ToolColumns => {
             let rows: Vec<(String, i64)> = conn.query(
@@ -521,6 +560,9 @@ impl eframe::App for MicsApp {
             });
             ui.separator();
             ui.horizontal(|ui| {
+                if ui.add_enabled(!self.busy && !self.updating, egui::Button::new("Trạng thái máy (MACHINEWORK)")).clicked() {
+                    self.start_db(DbOperation::MachineWork);
+                }
                 if ui.add_enabled(!self.busy && !self.updating, egui::Button::new("Máy và khuôn (SCHEDULE + TOOL)")).clicked() {
                     self.start_db(DbOperation::ScheduleNow);
                 }
@@ -528,7 +570,7 @@ impl eframe::App for MicsApp {
                     self.start_db(DbOperation::ToolColumns);
                 }
             });
-            ui.small("Ghép TOOL.ENTRYNO = SCHEDULE.TOOLENTRYNO. MACHINESEQ=1 chỉ là lịch dự kiến; chưa phải xác nhận đang chạy.");
+            ui.small("MACHINEWORK.MORDERNO + MACHINENO → SCHEDULE; TOOLENTRYNO → TOOL. Trạng thái 450 cần kiểm tra lý do thực tế.");
             ui.separator();
             ui.label(&self.status);
             ui.horizontal(|ui| {
