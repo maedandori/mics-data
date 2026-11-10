@@ -32,12 +32,22 @@ jobs:
         run: |
           $hash = (Get-FileHash -Algorithm SHA256 target/release/mics-data.exe).Hash.ToLower()
           "$hash  mics-data.exe" | Set-Content -Encoding ascii target/release/mics-data.exe.sha256
+      - name: Package portable ZIP and SHA256
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $zip = 'target/release/mics-data-v0.3.0-windows-x64.zip'
+          Compress-Archive -Path 'target/release/mics-data.exe', 'target/release/mics-data.exe.sha256' -DestinationPath $zip -Force
+          $sha = (Get-FileHash -Algorithm SHA256 $zip).Hash.ToLower()
+          "$sha  mics-data-v0.3.0-windows-x64.zip" | Set-Content -Encoding ascii 'target/release/mics-data-v0.3.0-windows-x64.zip.sha256'
       - uses: actions/upload-artifact@v4
         with:
           name: mics-data-windows-x64
           path: |
             target/release/mics-data.exe
             target/release/mics-data.exe.sha256
+            target/release/mics-data-v0.3.0-windows-x64.zip
+            target/release/mics-data-v0.3.0-windows-x64.zip.sha256
           if-no-files-found: error
       - name: Publish update to GitHub Releases
         if: startsWith(github.ref, 'refs/tags/v')
@@ -45,7 +55,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: pwsh
         run: |
-          gh release create "${{ github.ref_name }}" target/release/mics-data.exe target/release/mics-data.exe.sha256 --title "${{ github.ref_name }}" --notes "MICS Data Windows auto-update release" --verify-tag
+          gh release create "${{ github.ref_name }}" target/release/mics-data.exe target/release/mics-data.exe.sha256 target/release/mics-data-v0.3.0-windows-x64.zip target/release/mics-data-v0.3.0-windows-x64.zip.sha256 --title "${{ github.ref_name }}" --notes "MICS Data Windows auto-update release" --verify-tag
 
       - name: Publish version from manual workflow
         if: github.event_name == 'workflow_dispatch' && inputs.publish_release
@@ -53,7 +63,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: pwsh
         run: |
-          gh release create "v0.3.0" target/release/mics-data.exe target/release/mics-data.exe.sha256 --target "${{ github.sha }}" --title "v0.3.0" --notes "Add KANAGATA-style live Firebird machine dashboard"
+          gh release create "v0.3.0" target/release/mics-data.exe target/release/mics-data.exe.sha256 target/release/mics-data-v0.3.0-windows-x64.zip target/release/mics-data-v0.3.0-windows-x64.zip.sha256 --target "${{ github.sha }}" --title "v0.3.0" --notes "Add KANAGATA-style live Firebird machine dashboard"
 
       - name: Publish dashboard v0.3.0 after successful build on main
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -66,4 +76,17 @@ jobs:
             Write-Host "v0.3.0 already exists; avoiding duplicate release."
             exit 0
           }
-          gh release create "v0.3.0" target/release/mics-data.exe target/release/mics-data.exe.sha256 --target "${{ github.sha }}" --title "v0.3.0" --notes "Live Firebird machine dashboard, read-only operation, auto-update"
+          gh release create "v0.3.0" target/release/mics-data.exe target/release/mics-data.exe.sha256 target/release/mics-data-v0.3.0-windows-x64.zip target/release/mics-data-v0.3.0-windows-x64.zip.sha256 --target "${{ github.sha }}" --title "v0.3.0" --notes "Live Firebird machine dashboard, read-only operation, auto-update"
+
+      - name: Upload portable ZIP to existing v0.3.0 release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release view "v0.3.0" 2>$null
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "Release does not exist yet. Publish step above must succeed first."
+            exit 1
+          }
+          gh release upload "v0.3.0" target/release/mics-data-v0.3.0-windows-x64.zip target/release/mics-data-v0.3.0-windows-x64.zip.sha256 --clobber
