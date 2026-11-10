@@ -4,27 +4,40 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
-    paths:
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - "src/**"
-      - ".github/workflows/build-windows.yml"
+    tags: ["v*"]
+    paths-ignore:
+      - "**/*.md"
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install Rust stable
+      - name: Rust stable
         uses: dtolnay/rust-toolchain@stable
-      - name: Build Windows executable
-        run: cargo build --release
-      - name: Upload EXE
-        uses: actions/upload-artifact@v4
+      - name: Verify Rust code
+        run: cargo check --locked
+      - name: Build Windows GUI executable
+        run: cargo build --release --locked
+      - name: Generate SHA256
+        shell: pwsh
+        run: |
+          $hash = (Get-FileHash -Algorithm SHA256 target/release/mics-data.exe).Hash.ToLower()
+          "$hash  mics-data.exe" | Set-Content -Encoding ascii target/release/mics-data.exe.sha256
+      - uses: actions/upload-artifact@v4
         with:
           name: mics-data-windows-x64
-          path: target/release/mics-data.exe
+          path: |
+            target/release/mics-data.exe
+            target/release/mics-data.exe.sha256
           if-no-files-found: error
+      - name: Publish update to GitHub Releases
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: pwsh
+        run: |
+          gh release create "${{ github.ref_name }}" target/release/mics-data.exe target/release/mics-data.exe.sha256 --title "${{ github.ref_name }}" --notes "MICS Data Windows auto-update release" --verify-tag
