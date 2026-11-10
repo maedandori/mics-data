@@ -501,21 +501,21 @@ fn query_machine_nodes(cfg: &Settings, password: &str) -> Result<Vec<MachineNode
     // Match production order AND machine ID to avoid mixing scheduled molds.
     // The data does not currently expose which CAUSE entry is active.
     let rows: Vec<(String,String,String,String,String,String,String,String,String)> = conn.query(
-        "SELECT TRIM(CAST(W.MACHINENO AS VARCHAR(24))), \\
-                COALESCE(TRIM(CAST(W.MORDERNO AS VARCHAR(40))), ''), \\
-                COALESCE(TRIM(CAST(W.STATUS AS VARCHAR(16))), ''), \\
-                COALESCE(TRIM(CAST(S.PARTSNAME AS VARCHAR(255))), ''), \\
-                COALESCE(TRIM(CAST(T.TOOLNO AS VARCHAR(80))), ''), \\
-                COALESCE(TRIM(CAST(T.TOOLNAME AS VARCHAR(255))), ''), \\
-                COALESCE(TRIM(CAST(W.TOTALQTYOK AS VARCHAR(24))), ''), \\
-                COALESCE(TRIM(CAST(W.TOTALQTYNG AS VARCHAR(24))), ''), \\
-                COALESCE(TRIM(CAST(W.STAFFNAME AS VARCHAR(100))), '') \\
-         FROM MACHINEWORK W \\
-         LEFT JOIN SCHEDULE S ON S.MORDERNO = W.MORDERNO \\
-            AND S.MACHINENO = W.MACHINENO \\
-            AND COALESCE(S.DELETEFLG, 0) = 0 \\
-         LEFT JOIN TOOL T ON T.ENTRYNO = S.TOOLENTRYNO \\
-         WHERE W.MACHINENO IN (5,6,7,8,10,11,12,13,14,15,16,17,18,19) \\
+        "SELECT TRIM(CAST(W.MACHINENO AS VARCHAR(24))), \
+                COALESCE(TRIM(CAST(W.MORDERNO AS VARCHAR(40))), ''), \
+                COALESCE(TRIM(CAST(W.STATUS AS VARCHAR(16))), ''), \
+                COALESCE(TRIM(CAST(S.PARTSNAME AS VARCHAR(255))), ''), \
+                COALESCE(TRIM(CAST(T.TOOLNO AS VARCHAR(80))), ''), \
+                COALESCE(TRIM(CAST(T.TOOLNAME AS VARCHAR(255))), ''), \
+                COALESCE(TRIM(CAST(W.TOTALQTYOK AS VARCHAR(24))), ''), \
+                COALESCE(TRIM(CAST(W.TOTALQTYNG AS VARCHAR(24))), ''), \
+                COALESCE(TRIM(CAST(W.STAFFNAME AS VARCHAR(100))), '') \
+         FROM MACHINEWORK W \
+         LEFT JOIN SCHEDULE S ON S.MORDERNO = W.MORDERNO \
+            AND S.MACHINENO = W.MACHINENO \
+            AND COALESCE(S.DELETEFLG, 0) = 0 \
+         LEFT JOIN TOOL T ON T.ENTRYNO = S.TOOLENTRYNO \
+         WHERE W.MACHINENO IN (5,6,7,8,10,11,12,13,14,15,16,17,18,19) \
          ORDER BY W.MACHINENO", ()
     ).map_err(|e| e.to_string())?;
     // Some schedules may contain multiple records for the same order.
