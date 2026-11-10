@@ -29,24 +29,86 @@ struct Settings {
 }
 
 impl Settings {
-    fn path() -> Option<PathBuf> {
-        dirs::config_dir().map(|p| p.join("MICS-Data").join("settings.json"))
+    // The portable INI always lives in the same folder as the executable.
+    // This also means auto-updating the EXE leaves the INI untouched.
+    fn path() -> Result<PathBuf, String> {
+        std::env::current_exe()
+            .map_err(|e| format!("Cannot locate executable: {e}"))?
+            .parent()
+            .map(|p| p.join("setting.ini"))
+            .ok_or_else(|| "Cannot locate executable folder".into())
     }
+
+    fn defaults() -> Self {
+        Self { port: "3050".into(), user: "SYSDBA".into(), ..Self::default() }
+    }
+
+    fn parse_ini(text: &str) -> Self {
+        let mut cfg = Self::defaults();
+        let mut in_connection = false;
+        for line in text.trim_start_matches('\u{feff}').lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with(';') || line.starts_with('#') { continue; }
+            if line.starts_with('[') && line.ends_with(']') {
+                in_connection = line[1..line.len()-1].eq_ignore_ascii_case("firebird");
+                continue;
+            }
+            if !in_connection { continue; }
+            if let Some((key, value)) = line.split_once('=') {
+                let value = value.trim().to_owned();
+                match key.trim().to_ascii_lowercase().as_str() {
+                    "host" => cfg.host = value,
+                    "port" => cfg.port = value,
+                    "database" => cfg.database = value,
+                    "user" => cfg.user = value,
+                    // Password is deliberately not loaded or stored in plain text.
+                    _ => {}
+                }
+            }
+        }
+        cfg
+    }
+
     fn load() -> Self {
-        Self::path().and_then(|p| fs::read(p).ok())
-            .and_then(|b| serde_json::from_slice(&b).ok())
-            .unwrap_or_else(|| Self {
-                port: "3050".into(),
-                user: "SYSDBA".into(),
-                ..Self::default()
-            })
+        if let Ok(path) = Self::path() {
+            if let Ok(text) = fs::read_to_string(&path) {
+                return Self::parse_ini(&text);
+            }
+        }
+        // One-time compatibility with v0.2.1, which used AppData/settings.json.
+        // Do not delete the original file until a new INI is saved successfully.
+        dirs::config_dir()
+            .map(|p| p.join("MICS-Data").join("settings.json"))
+            .and_then(|path| fs::read(path).ok())
+            .and_then(|data| serde_json::from_slice(&data).ok())
+            .unwrap_or_else(Self::defaults)
     }
+
     fn save(&self) -> Result<(), String> {
-        let path = Self::path().ok_or("Unable to locate configuration directory")?;
-        fs::create_dir_all(path.parent().ok_or("Invalid configuration path")?)
-            .map_err(|e| e.to_string())?;
-        fs::write(path, serde_json::to_vec_pretty(self).map_err(|e| e.to_string())?)
-            .map_err(|e| e.to_string())
+        let path = Self::path()?;
+        for (key, val) in [
+            ("host", &self.host),
+            ("port", &self.port),
+            ("database", &self.database),
+            ("user", &self.user),
+        ] {
+            if val.contains(['\r', '\n']) {
+                return Err(format!("Invalid newline in {key}"));
+            }
+        }
+        let content = format!(
+            "; MICS Data portable configuration (UTF-8)\n; Password is never written to disk.\n[firebird]\nhost={}\nport={}\ndatabase={}\nuser={}\n",
+            self.host, self.port, self.database, self.user,
+        );
+        // A fresh sidecar file in the EXE folder, not the previous AppData path.
+        // Fail visibly when this folder is read-only.
+        let temp = path.with_extension("ini.tmp");
+        fs::write(&temp, content.as_bytes()).map_err(|e| format!("Cannot write {}: {e}", temp.display()))?;
+        if path.exists() {
+            // Windows rename does not replace destination atomically.
+            fs::remove_file(&path).map_err(|e| format!("Cannot replace INI: {e}"))?;
+        }
+        fs::rename(&temp, &path).map_err(|e| format!("Cannot finish INI save: {e}"))
     }
 }
 
@@ -376,6 +438,9 @@ impl eframe::App for MicsApp {
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.heading("MICS Data - Firebird Connector");
             ui.label(format!("Version v{VERSION} | Windows | Read-only"));
+            if let Ok(path) = Settings::path() {
+                ui.small(format!("INI: {}", path.display()));
+            }
             ui.separator();
 
             egui::Grid::new("settings").num_columns(2).spacing([10.0, 9.0]).show(ui, |ui| {
@@ -390,11 +455,11 @@ impl eframe::App for MicsApp {
                 ui.label("Password");
                 ui.add(egui::TextEdit::singleline(&mut self.password).password(true)); ui.end_row();
             });
-            ui.label("Password chỉ giữ trong RAM. Host/port/path/user được lưu trên PC.");
+            ui.label("Cấu hình: setting.ini (cùng thư mục EXE). Mật khẩu không ghi ra file.");
             ui.horizontal(|ui| {
                 if ui.button("Lưu cấu hình").clicked() {
                     self.status = match self.settings.save() {
-                        Ok(()) => "Đã lưu cấu hình (không lưu mật khẩu).".into(),
+                        Ok(()) => "Đã lưu setting.ini cạnh mics-data.exe (không lưu mật khẩu).".into(),
                         Err(e) => format!("Save error: {e}"),
                     };
                 }
