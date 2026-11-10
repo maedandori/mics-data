@@ -19,9 +19,9 @@ jobs:
       - name: Rust stable
         uses: dtolnay/rust-toolchain@stable
       - name: Verify Rust code
-        run: cargo check --locked
+        run: cargo check
       - name: Build Windows GUI executable
-        run: cargo build --release --locked
+        run: cargo build --release
       - name: Generate SHA256
         shell: pwsh
         run: |
