@@ -92,7 +92,7 @@ impl Settings {
             ("database", &self.database),
             ("user", &self.user),
         ] {
-            if val.contains(['\r', '\n']) {
+            if val.contains('\r') || val.contains('\n') {
                 return Err(format!("Invalid newline in {key}"));
             }
         }
