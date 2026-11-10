@@ -1,34 +1,31 @@
-# MICS Data (Rust)
+# MICS Data – Windows Firebird Connector
 
-Small **read-only** Firebird inspector for MICS on Windows. Connects to an existing Firebird server over TCP; it does not control MICS DBEdit, create a local copy of the database, or change records. The pure-Rust driver does not require `fbclient.dll`.
+v0.2.0 is a graphical Windows application. Double-click `mics-data.exe`; it stays open and shows server configuration, connection test, tables, columns, counts, version and update status.
 
-## Windows setup
+## Safety and database access
+- Transactions are **read-only**, no INSERT/UPDATE/DELETE.
+- Use a SELECT-only Firebird user if possible.
+- Database path means the **absolute path on the Firebird server**, not on your local PC.
+- Password is never persisted; re-enter it whenever you launch the app.
+- Host, port, database path and user are saved under Windows user config directory (AppData).
+- Never commit real database credentials or .fdb files to this public repository.
 
-Set environment variables in Command Prompt (examples are placeholders; use actual company server values):
+## Install and update
+1. Download `mics-data.exe` from the latest **GitHub Release** or from Actions artifact.
+2. Save it in a **writable folder** (for example `%LOCALAPPDATA%\\MICS-Data\\mics-data.exe`). Do not place it in Program Files unless the user has write access.
+3. Double-click. Fill in connection details and click **Kiểm tra kết nối**.
+4. On launch and once every 6 hours while idle, it checks GitHub Releases. When a newer semantic version exists, it downloads the signed-by-checksum release payload, verifies SHA-256, closes the UI, replaces the EXE via an isolated helper copy, and reopens.
+5. Click **Kiểm tra cập nhật** to trigger a check immediately.
 
-```bat
-set "MICS_FB_HOST=192.168.1.10"
-set "MICS_FB_PORT=3050"
-set "MICS_FB_DATABASE=D:\\MICS\\data.fdb"
-set "MICS_FB_USER=read_only_user"
-mics-data.exe test
-mics-data.exe tables
-mics-data.exe columns YOUR_TABLE
-mics-data.exe count YOUR_TABLE
-```
+The updater only installs **GitHub Releases**, not Actions artifact builds. Creating a tagged release `v0.2.0` (or a later version) runs the Windows build and publishes its EXE and SHA-256 checksum. Builds on `main` are development artifacts and do not become auto-updates.
 
-The database path is the path **on the Firebird server**, not the PC running the application. The password is asked interactively and hidden when typed. For unattended use, an optional `MICS_FB_PASSWORD` environment variable is supported, but secure secret storage is preferable.
-
-**Do not commit passwords, production database files, exports, or real connection settings into this public repository.** Use a Firebird login with SELECT-only permissions where possible; the application also configures read-only transactions.
+The checksum protects against download corruption, but is not a cryptographic publisher signature. For high-assurance deployments, add Windows Authenticode signing.
 
 ## Build
+The workflow builds and checks Rust on `windows-latest`, uploads EXE+hash, and publishes a release on version tags.
 
-From this repository run `cargo build --release` with a current stable Rust toolchain. Or open GitHub Actions → **Build MICS Data Windows** → **Run workflow**, then retrieve the build artifact after success.
-
-## Roadmap
-
-After confirming a successful connection and the correct source tables, add a configurable incremental read-only sync to Cloudflare D1 (with batching/retries, mapping, and access control). That synchronization is **not included** in v0.1.0.
-
-## Limitations
-
-Works for Firebird servers whose authentication and wire protocol are supported by the pure-Rust driver. If the company server uses unsupported legacy auth or encryption, a native `fbclient.dll` mode may be required. The first build and a real Firebird connection must be validated on the company network.
+## Notes
+If no internet is available, the update check reports an error but the GUI stays usable.
+If no server parameters are configured, the GUI stays open and asks for settings.
+Database connections are background threads so the UI remains responsive. Avoid scanning a large database with counts during production peaks.
+If the server uses unsupported legacy Firebird authentication, a native client mode may be necessary.
