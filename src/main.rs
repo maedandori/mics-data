@@ -550,7 +550,9 @@ fn query_machine_nodes(cfg: &Settings, password: &str) -> Result<Vec<MachineNode
                 COALESCE(TRIM(CAST(T.TOOLNAME AS VARCHAR(255))), ''), \
                 COALESCE(TRIM(CAST(W.TOTALQTYOK AS VARCHAR(24))), ''), \
                 COALESCE(TRIM(CAST(W.TOTALQTYNG AS VARCHAR(24))), ''), \
-                COALESCE(TRIM(CAST(W.STAFFNAME AS VARCHAR(100))), '') \
+                COALESCE(TRIM(CAST(W.STAFFNAME AS VARCHAR(100))), ''), \
+                COALESCE(TRIM(CAST(W.QTYPLAN AS VARCHAR(24))), ''), \
+                COALESCE(TRIM(CAST(W.REALCYCLETIME AS VARCHAR(24))), '') \
          FROM MACHINEWORK W \
          LEFT JOIN SCHEDULE S ON S.MORDERNO = W.MORDERNO \
             AND S.MACHINENO = W.MACHINENO \
