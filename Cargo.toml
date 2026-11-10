@@ -1,0 +1,10 @@
+[package]
+name = "mics-data"
+version = "0.1.0"
+edition = "2021"
+description = "Read-only Firebird database inspector for MICS"
+license = "MIT"
+
+[dependencies]
+rsfbclient = { version = "=0.29.0", default-features = false, features = ["pure_rust"] }
+rpassword = "7"
