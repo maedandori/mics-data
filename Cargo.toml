@@ -1,6 +1,6 @@
 [package]
 name = "mics-data"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2021"
 description = "MICS Firebird read-only Windows GUI with auto updater"
 
@@ -18,3 +18,6 @@ dirs = "6"
 opt-level = "s"
 lto = "thin"
 strip = true
+
+[build-dependencies]
+winresource = "0.1"
