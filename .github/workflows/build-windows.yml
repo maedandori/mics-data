@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       publish_release:
-        description: 'Publish v0.2.0 for auto updates after successful build'
+        description: 'Publish release for auto updates after successful build'
         type: boolean
         default: false
   push:
@@ -47,10 +47,10 @@ jobs:
         run: |
           gh release create "${{ github.ref_name }}" target/release/mics-data.exe target/release/mics-data.exe.sha256 --title "${{ github.ref_name }}" --notes "MICS Data Windows auto-update release" --verify-tag
 
-      - name: Publish v0.2.0 from manual workflow
+      - name: Publish version from manual workflow
         if: github.event_name == 'workflow_dispatch' && inputs.publish_release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: pwsh
         run: |
-          gh release create "v0.2.0" target/release/mics-data.exe target/release/mics-data.exe.sha256 --target "${{ github.sha }}" --title "v0.2.0" --notes "MICS Data Windows GUI and self updater"
+          gh release create "v0.2.1" target/release/mics-data.exe target/release/mics-data.exe.sha256 --target "${{ github.sha }}" --title "v0.2.1" --notes "Fix Vietnamese and Japanese UI font fallback"
