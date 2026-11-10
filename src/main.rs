@@ -308,13 +308,14 @@ fn query_db(cfg: &Settings, password: &str, op: DbOperation) -> Result<Vec<Strin
             ).map_err(|e| format!("MACHINEWORK query failed (verify actual table name): {e}"))?;
             let mut out = vec![
                 format!("MACHINEWORK → SCHEDULE → TOOL: {} dòng", rows.len()),
-                "Mã 200,420: hoạt động theo mẫu được xác nhận; 450: dừng (lý do không có trong các cột đã biết).".into(),
+                "Theo mẫu: 200=đang chạy, 420=dừng bảo trì (máy 5/13), 450=dừng (máy 15 thiếu người). Lý do chưa có cột nguồn xác nhận.".into(),
                 "MÁY | TÌNH TRẠNG | TÊN KHUÔN | MÃ KHUÔN | SẢN PHẨM | LỆNH SX | OK | NHÂN VIÊN".into(),
             ];
             out.extend(rows.into_iter().map(|(machine, order, status, product, _entry, tool_no, tool_name, qty_ok, staff)| {
                 let state = match status.as_str() {
-                    "200" | "420" => "ĐANG CHẠY (theo mã đã đối chiếu)",
-                    "450" => "DỪNG (chưa rõ lý do từ DB)",
+                    "200" => "ĐANG CHẠY",
+                    "420" => "DỪNG - 保守作業 (theo mẫu 5/13)",
+                    "450" => "DỪNG (lý do cần xác minh từ DB)",
                     _ => "CHƯA XÁC ĐỊNH",
                 };
                 let mold = if tool_name.is_empty() { "(chưa ghép được khuôn)" } else { &tool_name };
