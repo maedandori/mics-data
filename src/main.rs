@@ -125,14 +125,48 @@ struct Asset {
 
 enum Event {
     Db(Result<Vec<String>, String>),
+    Dashboard(Result<Vec<MachineNode>, String>),
     UpdateStatus(String),
     UpdateReady { version: String, staged: PathBuf },
 }
 
+
+#[derive(Clone, Default)]
+struct MachineNode {
+    machine: String,
+    order: String,
+    status: String,
+    product: String,
+    tool_no: String,
+    tool_name: String,
+    good: String,
+    bad: String,
+    staff: String,
+}
+impl MachineNode {
+    fn state(&self) -> &'static str {
+        match self.status.as_str() {
+            "200" => "ĐANG CHẠY",
+            "420" | "450" => "ĐANG DỪNG",
+            _ => "CHƯA XÁC ĐỊNH",
+        }
+    }
+    fn color(&self) -> egui::Color32 {
+        match self.status.as_str() {
+            "200" => egui::Color32::from_rgb(23, 92, 66),
+            "420" | "450" => egui::Color32::from_rgb(132, 43, 46),
+            _ => egui::Color32::from_rgb(64, 71, 86),
+        }
+    }
+}
 struct MicsApp {
     settings: Settings,
     password: String,
     output: Vec<String>,
+    nodes: Vec<MachineNode>,
+    node_last_update: Option<Instant>,
+    show_setup: bool,
+    selected_machine: Option<String>,
     selected: String,
     busy: bool,
     updating: bool,
@@ -150,6 +184,10 @@ impl MicsApp {
             settings: Settings::load(),
             password: String::new(),
             output: vec![],
+            nodes: vec![],
+            node_last_update: None,
+            show_setup: true,
+            selected_machine: None,
             selected: String::new(),
             busy: false,
             updating: false,
@@ -188,6 +226,27 @@ impl MicsApp {
         });
     }
 
+
+    fn refresh_dashboard(&mut self) {
+        if self.busy || self.updating { return; }
+        if self.settings.host.trim().is_empty()
+            || self.settings.database.trim().is_empty()
+            || self.settings.user.trim().is_empty()
+            || self.password.is_empty()
+        {
+            self.status = "Nhập mật khẩu Firebird và nhấn Làm mới để tải dashboard.".into();
+            self.show_setup = true;
+            return;
+        }
+        let cfg = self.settings.clone();
+        let pass = self.password.clone();
+        self.busy = true;
+        self.status = "Đang tải trạng thái máy trực tiếp từ Firebird...".into();
+        let tx = self.tx.clone();
+        thread::spawn(move || {
+            let _ = tx.send(Event::Dashboard(query_machine_nodes(&cfg, &pass)));
+        });
+    }
     fn check_updates(&mut self) {
         if self.updating { return; }
         self.updating = true;
@@ -208,6 +267,17 @@ impl MicsApp {
     fn events(&mut self, ctx: &egui::Context) {
         while let Ok(event) = self.rx.try_recv() {
             match event {
+                Event::Dashboard(result) => {
+                    self.busy = false;
+                    match result {
+                        Ok(nodes) => {
+                            self.status = format!("Đã tải {} máy trực tiếp từ Firebird.", nodes.len());
+                            self.node_last_update = Some(Instant::now());
+                            self.nodes = nodes;
+                        }
+                        Err(error) => self.status = format!("Lỗi tải dashboard: {error}"),
+                    }
+                }
                 Event::Db(result) => {
                     self.busy = false;
                     match result {
@@ -237,6 +307,11 @@ impl MicsApp {
                     }
                 }
             }
+        }
+        if !self.busy && !self.updating && !self.nodes.is_empty()
+            && self.node_last_update.is_some_and(|t| t.elapsed() >= Duration::from_secs(60))
+        {
+            self.refresh_dashboard();
         }
         // One check per 6 hours; only when no database task is active.
         if !self.busy && !self.updating && self.last_check.elapsed() >= Duration::from_secs(21600) {
@@ -414,6 +489,52 @@ fn query_db(cfg: &Settings, password: &str, op: DbOperation) -> Result<Vec<Strin
     }
 }
 
+
+fn query_machine_nodes(cfg: &Settings, password: &str) -> Result<Vec<MachineNode>, String> {
+    let port: u16 = cfg.port.parse().map_err(|_| "TCP port không hợp lệ".to_string())?;
+    let mut builder = rsfbclient::builder_pure_rust();
+    builder.host(cfg.host.trim()).port(port)
+        .db_name(cfg.database.trim()).user(cfg.user.trim()).pass(password);
+    builder.with_transaction(|tr| tr.read_only().no_wait());
+    let mut conn = builder.connect().map_err(|e| e.to_string())?;
+    // MACHINEWORK is a current-state snapshot: one row per machine.
+    // Match production order AND machine ID to avoid mixing scheduled molds.
+    // The data does not currently expose which CAUSE entry is active.
+    let rows: Vec<(String,String,String,String,String,String,String,String,String)> = conn.query(
+        "SELECT TRIM(CAST(W.MACHINENO AS VARCHAR(24))), \\
+                COALESCE(TRIM(CAST(W.MORDERNO AS VARCHAR(40))), ''), \\
+                COALESCE(TRIM(CAST(W.STATUS AS VARCHAR(16))), ''), \\
+                COALESCE(TRIM(CAST(S.PARTSNAME AS VARCHAR(255))), ''), \\
+                COALESCE(TRIM(CAST(T.TOOLNO AS VARCHAR(80))), ''), \\
+                COALESCE(TRIM(CAST(T.TOOLNAME AS VARCHAR(255))), ''), \\
+                COALESCE(TRIM(CAST(W.TOTALQTYOK AS VARCHAR(24))), ''), \\
+                COALESCE(TRIM(CAST(W.TOTALQTYNG AS VARCHAR(24))), ''), \\
+                COALESCE(TRIM(CAST(W.STAFFNAME AS VARCHAR(100))), '') \\
+         FROM MACHINEWORK W \\
+         LEFT JOIN SCHEDULE S ON S.MORDERNO = W.MORDERNO \\
+            AND S.MACHINENO = W.MACHINENO \\
+            AND COALESCE(S.DELETEFLG, 0) = 0 \\
+         LEFT JOIN TOOL T ON T.ENTRYNO = S.TOOLENTRYNO \\
+         WHERE W.MACHINENO IN (5,6,7,8,10,11,12,13,14,15,16,17,18,19) \\
+         ORDER BY W.MACHINENO", ()
+    ).map_err(|e| e.to_string())?;
+    // Some schedules may contain multiple records for the same order.
+    // Keep only one node per machine and mark conflicting records as unknown.
+    let mut nodes: Vec<MachineNode> = Vec::new();
+    for (machine, order, status, product, tool_no, tool_name, good, bad, staff) in rows {
+        if let Some(existing) = nodes.iter_mut().find(|n| n.machine == machine) {
+            if existing.order != order || existing.tool_name != tool_name {
+                existing.status = "AMBIGUOUS".into();
+                existing.tool_name = "Nhiều lịch khớp - kiểm tra SCHEDULE".into();
+            }
+            continue;
+        }
+        nodes.push(MachineNode { machine, order, status, product, tool_no, tool_name, good, bad, staff });
+    }
+    nodes.sort_by_key(|n| n.machine.parse::<u32>().unwrap_or(u32::MAX));
+    Ok(nodes)
+}
+
 fn http_get(url: &str) -> Result<Vec<u8>, String> {
     let response = ureq::AgentBuilder::new()
         .timeout(Duration::from_secs(45))
@@ -545,6 +666,70 @@ impl eframe::App for MicsApp {
         self.events(ctx);
         ctx.request_repaint_after(Duration::from_millis(250));
         egui::CentralPanel::default().show(ctx, |ui| {
+
+            ui.horizontal(|ui| {
+                ui.heading("MICS DATA | MACHINE DASHBOARD");
+                ui.label(format!("v{VERSION}"));
+                if ui.add_enabled(!self.busy && !self.updating, egui::Button::new("Làm mới")).clicked() {
+                    self.refresh_dashboard();
+                }
+                if ui.button(if self.show_setup { "Ẩn cài đặt" } else { "Cài đặt" }).clicked() {
+                    self.show_setup = !self.show_setup;
+                }
+            });
+            let running = self.nodes.iter().filter(|n| n.status == "200").count();
+            let stopped = self.nodes.iter().filter(|n| n.status == "420" || n.status == "450").count();
+            ui.horizontal(|ui| {
+                ui.colored_label(egui::Color32::from_rgb(45, 170, 105), format!("Đang chạy: {running}"));
+                ui.colored_label(egui::Color32::from_rgb(218, 80, 85), format!("Đang dừng: {stopped}"));
+                ui.label(format!("Tổng: {}", self.nodes.len()));
+                if let Some(at) = self.node_last_update {
+                    ui.small(format!("Cập nhật {} giây trước | tự làm mới 60 giây", at.elapsed().as_secs()));
+                }
+            });
+            ui.label(&self.status);
+            ui.separator();
+            egui::ScrollArea::vertical().max_height(500.0).show(ui, |ui| {
+                if self.nodes.is_empty() {
+                    ui.label("Chưa có dữ liệu. Nhập thông tin Firebird và chọn Làm mới.");
+                } else {
+                    let nodes = self.nodes.clone();
+                    egui::Grid::new("machine_dashboard_grid").num_columns(3).spacing([9.0, 9.0]).show(ui, |ui| {
+                        for (idx, node) in nodes.iter().enumerate() {
+                            egui::Frame::group(ui.style()).fill(node.color()).show(ui, |ui| {
+                                ui.set_min_width(202.0);
+                                ui.set_max_width(220.0);
+                                let text = egui::Color32::WHITE;
+                                ui.label(egui::RichText::new(format!("{} 号機", node.machine)).size(21.0).strong().color(text));
+                                ui.label(egui::RichText::new(node.state()).strong().color(text));
+                                ui.separator();
+                                ui.label(egui::RichText::new(if node.tool_name.is_empty() { "金型未確認" } else { &node.tool_name }).size(15.0).strong().color(text));
+                                ui.label(egui::RichText::new(format!("型番: {}", node.tool_no)).color(text));
+                                ui.label(egui::RichText::new(&node.product).color(text));
+                                if ui.button("Chi tiết").clicked() {
+                                    self.selected_machine = Some(node.machine.clone());
+                                }
+                            });
+                            if idx % 3 == 2 { ui.end_row(); }
+                        }
+                    });
+                }
+                if let Some(machine) = &self.selected_machine {
+                    if let Some(node) = self.nodes.iter().find(|n| &n.machine == machine) {
+                        ui.separator();
+                        ui.heading(format!("Chi tiết máy {}", node.machine));
+                        ui.label(format!("Lệnh sản xuất: {}", node.order));
+                        ui.label(format!("Tên khuôn: {}", node.tool_name));
+                        ui.label(format!("Tên sản phẩm: {}", node.product));
+                        ui.label(format!("STATUS: {} ({})", node.status, node.state()));
+                        ui.label(format!("Sản phẩm OK: {} | NG: {}", node.good, node.bad));
+                        ui.label(format!("Nhân viên: {}", node.staff));
+                        ui.label("Lý do dừng từ CAUSE: chưa có khóa sự kiện để truy xuất.");
+                    }
+                }
+            });
+            if !self.show_setup { return; }
+            ui.separator();
             ui.heading("MICS Data - Firebird Connector");
             ui.label(format!("Version v{VERSION} | Windows | Read-only"));
             if let Ok(path) = Settings::path() {
