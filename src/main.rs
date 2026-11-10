@@ -246,7 +246,7 @@ impl MicsApp {
 }
 
 #[derive(Clone)]
-enum DbOperation { Test, Tables, Columns(String), Count(String), ScheduleNow, ToolColumns, MachineWork }
+enum DbOperation { Test, Tables, Columns(String), Count(String), ScheduleNow, ToolColumns, MachineWork, CauseCatalog, CauseReferences }
 
 fn query_db(cfg: &Settings, password: &str, op: DbOperation) -> Result<Vec<String>, String> {
     let port: u16 = cfg.port.parse().map_err(|_| "Invalid TCP port".to_string())?;
@@ -283,6 +283,36 @@ fn query_db(cfg: &Settings, password: &str, op: DbOperation) -> Result<Vec<Strin
             if rows.is_empty() { return Err("Table not found".into()); }
             Ok(rows.into_iter().map(|(name, position)| format!("{}: {name}", position+1)).collect())
         }
+        DbOperation::CauseCatalog => {
+            let rows: Vec<(i64, i64, i64, String, i64)> = conn.query(
+                "SELECT CAST(ENTRYNO AS BIGINT), CAST(CAUSETYPE AS BIGINT), \
+                 CAST(SEQNO AS BIGINT), TRIM(CAUSENAME), CAST(STOPFLG AS BIGINT) \
+                 FROM CAUSE ORDER BY CAUSETYPE, SEQNO", ()
+            ).map_err(|e| e.to_string())?;
+            let mut out = vec![format!("CAUSE: {} nguyên nhân trong danh mục", rows.len()),
+                "ENTRYNO | CAUSETYPE | SEQNO | CAUSENAME | STOPFLG".into()];
+            out.extend(rows.into_iter().map(|(entry, kind, seq, name, stop)|
+                format!("{entry} | {kind} | {seq} | {name} | {stop}")));
+            Ok(out)
+        }
+        DbOperation::CauseReferences => {
+            // Search metadata for potential stop-reason event tables.
+            // A name match is a *candidate*, not proof of a foreign key.
+            let rows: Vec<(String, String)> = conn.query(
+                "SELECT TRIM(RF.RDB$RELATION_NAME), TRIM(RF.RDB$FIELD_NAME) \
+                 FROM RDB$RELATION_FIELDS RF \
+                 JOIN RDB$RELATIONS R ON R.RDB$RELATION_NAME = RF.RDB$RELATION_NAME \
+                 WHERE COALESCE(R.RDB$SYSTEM_FLAG, 0) = 0 \
+                 AND (UPPER(TRIM(RF.RDB$FIELD_NAME)) LIKE '%CAUSE%' \
+                      OR UPPER(TRIM(RF.RDB$FIELD_NAME)) LIKE '%STOP%' \
+                      OR UPPER(TRIM(RF.RDB$FIELD_NAME)) LIKE '%DOWNTIME%') \
+                 ORDER BY RF.RDB$RELATION_NAME, RF.RDB$FIELD_NAME", ()
+            ).map_err(|e| e.to_string())?;
+            let mut out = vec![format!("Tìm thấy {} cột ứng viên chứa mã dừng máy", rows.len()),
+                "BẢNG | CỘT (chỉ là gợi ý; cần xem dữ liệu để xác minh JOIN)".into()];
+            out.extend(rows.into_iter().map(|(table, column)| format!("{table} | {column}")));
+            Ok(out)
+        }
         DbOperation::MachineWork => {
             // MACHINEWORK is the expected table name based on the export filename.
             // If the database uses a different name the query will report an error.
@@ -314,7 +344,7 @@ fn query_db(cfg: &Settings, password: &str, op: DbOperation) -> Result<Vec<Strin
             out.extend(rows.into_iter().map(|(machine, order, status, product, _entry, tool_no, tool_name, qty_ok, staff)| {
                 let state = match status.as_str() {
                     "200" => "ĐANG CHẠY",
-                    "420" => "DỪNG - 保守作業 (theo mẫu 5/13)",
+                    "420" => "DỪNG (máy 5/13: 保守作業 theo xác nhận)",
                     "450" => "DỪNG (lý do cần xác minh từ DB)",
                     _ => "CHƯA XÁC ĐỊNH",
                 };
@@ -571,7 +601,15 @@ impl eframe::App for MicsApp {
                     self.start_db(DbOperation::ToolColumns);
                 }
             });
-            ui.small("MACHINEWORK.MORDERNO + MACHINENO → SCHEDULE; TOOLENTRYNO → TOOL. Trạng thái 450 cần kiểm tra lý do thực tế.");
+            ui.horizontal(|ui| {
+                if ui.add_enabled(!self.busy && !self.updating, egui::Button::new("Danh mục lý do (CAUSE)")).clicked() {
+                    self.start_db(DbOperation::CauseCatalog);
+                }
+                if ui.add_enabled(!self.busy && !self.updating, egui::Button::new("Tìm bảng ghi lý do dừng")).clicked() {
+                    self.start_db(DbOperation::CauseReferences);
+                }
+            });
+            ui.small("MACHINEWORK → SCHEDULE → TOOL. CAUSE là danh mục; chưa xác định bảng lưu mã lý do theo máy.");
             ui.separator();
             ui.label(&self.status);
             ui.horizontal(|ui| {
