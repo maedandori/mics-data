@@ -1,6 +1,6 @@
 [package]
 name = "mics-data"
-version = "0.2.5"
+version = "0.2.6"
 edition = "2021"
 description = "MICS Firebird read-only Windows GUI with auto updater"
 
