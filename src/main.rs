@@ -332,6 +332,43 @@ fn updater(args: &[String]) -> Result<(), String> {
     Err("Timed out waiting for main process to exit; old version kept".into())
 }
 
+
+// egui's built-in font may not contain Vietnamese combining marks.
+// Load installed Windows fonts that cover Vietnamese and Japanese glyphs.
+fn install_windows_fonts(ctx: &egui::Context) {
+    let font_root = std::env::var_os("WINDIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(r"C:\Windows"))
+        .join("Fonts");
+    let mut definitions = egui::FontDefinitions::default();
+    let candidates = [
+        ("windows-segoe", "segoeui.ttf"),
+        ("windows-arial", "arial.ttf"),
+        ("windows-meiryo", "meiryo.ttc"),
+        ("windows-yugothic", "YuGothR.ttc"),
+    ];
+    let mut installed = Vec::new();
+    for (name, filename) in candidates {
+        if let Ok(data) = fs::read(font_root.join(filename)) {
+            definitions.font_data.insert(
+                name.to_string(),
+                egui::FontData::from_owned(data).into(),
+            );
+            installed.push(name.to_string());
+        }
+    }
+    // Proportional and monospaced UI (including database output) both
+    // prefer Windows font fallbacks before egui's limited bundled fonts.
+    for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
+        if let Some(list) = definitions.families.get_mut(&family) {
+            for font in installed.iter().rev() {
+                list.insert(0, font.clone());
+            }
+        }
+    }
+    ctx.set_fonts(definitions);
+}
+
 impl eframe::App for MicsApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.events(ctx);
@@ -413,7 +450,10 @@ fn main() {
     };
     if let Err(e) = eframe::run_native(
         "MICS Data", options,
-        Box::new(|_cc| Ok(Box::new(MicsApp::new())))
+        Box::new(|cc| {
+            install_windows_fonts(&cc.egui_ctx);
+            Ok(Box::new(MicsApp::new()))
+        })
     ) {
         let path = std::env::temp_dir().join("mics-data-startup-error.txt");
         let _ = fs::write(path, e.to_string());
