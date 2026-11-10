@@ -1,31 +1,40 @@
-# MICS Data – Windows Firebird Connector
+# MICS Data – Firebird Connector (Rust) v0.2.2
 
-v0.2.0 is a graphical Windows application. Double-click `mics-data.exe`; it stays open and shows server configuration, connection test, tables, columns, counts, version and update status.
+Windows graphical Firebird database inspector. Read-only database transactions.
 
-## Safety and database access
-- Transactions are **read-only**, no INSERT/UPDATE/DELETE.
-- Use a SELECT-only Firebird user if possible.
-- Database path means the **absolute path on the Firebird server**, not on your local PC.
-- Password is never persisted; re-enter it whenever you launch the app.
-- Host, port, database path and user are saved under Windows user config directory (AppData).
-- Never commit real database credentials or .fdb files to this public repository.
+## Portable setting.ini
 
-## Install and update
-1. Download `mics-data.exe` from the latest **GitHub Release** or from Actions artifact.
-2. Save it in a **writable folder** (for example `%LOCALAPPDATA%\\MICS-Data\\mics-data.exe`). Do not place it in Program Files unless the user has write access.
-3. Double-click. Fill in connection details and click **Kiểm tra kết nối**.
-4. On launch and once every 6 hours while idle, it checks GitHub Releases. When a newer semantic version exists, it downloads the signed-by-checksum release payload, verifies SHA-256, closes the UI, replaces the EXE via an isolated helper copy, and reopens.
-5. Click **Kiểm tra cập nhật** to trigger a check immediately.
+After launching `mics-data.exe`, enter the connection values and press **Lưu cấu hình**. The application creates `setting.ini` **in the same folder as the running executable**. It does not write new settings to AppData. An existing AppData `MICS-Data/settings.json` from v0.2.1 is read only as a one-time fallback when `setting.ini` is absent. Save once to create the new INI.
 
-The updater only installs **GitHub Releases**, not Actions artifact builds. Creating a tagged release `v0.2.0` (or a later version) runs the Windows build and publishes its EXE and SHA-256 checksum. Builds on `main` are development artifacts and do not become auto-updates.
+Example:
 
-The checksum protects against download corruption, but is not a cryptographic publisher signature. For high-assurance deployments, add Windows Authenticode signing.
+```ini
+[firebird]
+host=192.168.1.10
+port=3050
+database=D:\\MICS\\DATA.FDB
+user=SYSDBA
+```
 
-## Build
-The workflow builds and checks Rust on `windows-latest`, uploads EXE+hash, and publishes a release on version tags.
+The database path must be the path on the Firebird server. The password is kept only in RAM and is not saved as plaintext. Use a Firebird user with SELECT-only privileges where feasible.
 
-## Notes
-If no internet is available, the update check reports an error but the GUI stays usable.
-If no server parameters are configured, the GUI stays open and asks for settings.
-Database connections are background threads so the UI remains responsive. Avoid scanning a large database with counts during production peaks.
-If the server uses unsupported legacy Firebird authentication, a native client mode may be necessary.
+**Important:** The executable folder must be writable. For example, use `C:\\MICS-Data\\mics-data.exe` where your Windows account can write. Running from `Program Files` often needs elevated permissions to create the INI and auto-update. A save failure is reported visibly inside the app.
+
+## Icon
+
+A custom blue database icon is generated in `build.rs` and embedded in the Windows EXE at compilation; no adjacent `.ico` file is needed. Windows Explorer may cache an older icon until refreshed.
+
+## Building and updating
+
+Open GitHub Actions **Build MICS Data Windows**, run the workflow and optionally enable `publish_release` to publish `v0.2.2` after build success.
+
+New builds on main are Actions artifacts. Only GitHub Releases with a newer semantic version are used by the built-in updater.
+
+Updates download an EXE and SHA-256 file, verify the checksum, close the app, replace the EXE using a helper and restart. The `setting.ini` in the directory is not replaced.
+
+## Safety
+
+- No SQL data-writing operations are exposed.
+- Do not commit private production addresses, password files, database files or exports to this public repo.
+- A SHA-256 checksum is only an integrity check, not a signature proving publisher authenticity.
+- The first build and real Windows/Firebird connection must be validated before production use.
