@@ -202,7 +202,7 @@ impl MicsApp {
     }
 
     fn start_db(&mut self, operation: DbOperation) {
-        if self.busy || self.updating { return; }
+        if self.busy { return; }
         if self.settings.host.trim().is_empty()
             || self.settings.database.trim().is_empty()
             || self.settings.user.trim().is_empty()
@@ -670,7 +670,7 @@ impl eframe::App for MicsApp {
             ui.horizontal(|ui| {
                 ui.heading("MICS DATA | MACHINE DASHBOARD");
                 ui.label(format!("v{VERSION}"));
-                if ui.add_enabled(!self.busy && !self.updating, egui::Button::new("Làm mới")).clicked() {
+                if ui.add_enabled(!self.busy, egui::Button::new("Làm mới")).clicked() {
                     self.refresh_dashboard();
                 }
                 if ui.button(if self.show_setup { "Ẩn cài đặt" } else { "Cài đặt" }).clicked() {
@@ -689,7 +689,7 @@ impl eframe::App for MicsApp {
             });
             ui.label(&self.status);
             ui.separator();
-            egui::ScrollArea::vertical().max_height(500.0).show(ui, |ui| {
+            egui::ScrollArea::vertical().max_height(if self.show_setup { 220.0 } else { 500.0 }).show(ui, |ui| {
                 if self.nodes.is_empty() {
                     ui.label("Chưa có dữ liệu. Nhập thông tin Firebird và chọn Làm mới.");
                 } else {
