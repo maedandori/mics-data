@@ -246,7 +246,7 @@ impl MicsApp {
 }
 
 #[derive(Clone)]
-enum DbOperation { Test, Tables, Columns(String), Count(String) }
+enum DbOperation { Test, Tables, Columns(String), Count(String), ScheduleNow, ToolColumns }
 
 fn query_db(cfg: &Settings, password: &str, op: DbOperation) -> Result<Vec<String>, String> {
     let port: u16 = cfg.port.parse().map_err(|_| "Invalid TCP port".to_string())?;
@@ -282,6 +282,38 @@ fn query_db(cfg: &Settings, password: &str, op: DbOperation) -> Result<Vec<Strin
             ).map_err(|e| e.to_string())?;
             if rows.is_empty() { return Err("Table not found".into()); }
             Ok(rows.into_iter().map(|(name, position)| format!("{}: {name}", position+1)).collect())
+        }
+        DbOperation::ToolColumns => {
+            let rows: Vec<(String, i64)> = conn.query(
+                "SELECT TRIM(RDB$FIELD_NAME), CAST(RDB$FIELD_POSITION AS BIGINT) \
+                 FROM RDB$RELATION_FIELDS WHERE TRIM(RDB$RELATION_NAME) = 'TOOL' \
+                 ORDER BY RDB$FIELD_POSITION", ()
+            ).map_err(|e| e.to_string())?;
+            if rows.is_empty() { return Err("TOOL has no visible columns or does not exist".into()); }
+            let mut out = vec!["TOOL: danh sách cột để xác định khóa nối với SCHEDULE.TOOLENTRYNO".to_owned()];
+            out.extend(rows.into_iter().map(|(name, position)| format!("{}: {name}", position + 1)));
+            Ok(out)
+        }
+        DbOperation::ScheduleNow => {
+            // MACHINESEQ=1 is a *schedule* heuristic, not proof of machine activity.
+            // Avoid interpreting STATUS without first verifying its meaning in MICS.
+            let rows: Vec<(String, String, String, String)> = conn.query(
+                "SELECT TRIM(CAST(MACHINENO AS VARCHAR(24))), \
+                        COALESCE(TRIM(CAST(PARTSNAME AS VARCHAR(255))), ''), \
+                        COALESCE(TRIM(CAST(TOOLENTRYNO AS VARCHAR(24))), ''), \
+                        COALESCE(TRIM(CAST(STATUS AS VARCHAR(16))), '') \
+                 FROM SCHEDULE \
+                 WHERE MACHINESEQ = 1 AND COALESCE(DELETEFLG, 0) = 0 \
+                 ORDER BY MACHINENO", ()
+            ).map_err(|e| e.to_string())?;
+            let mut out = vec![
+                format!("SCHEDULE: {} công việc đầu tiên theo máy", rows.len()),
+                "CHƯA XÁC NHẬN ĐANG CHẠY: cần giải mã STATUS và đối chiếu dữ liệu thực tế.".to_owned(),
+                "MACHINE | PARTSNAME | TOOLENTRYNO | STATUS".to_owned()
+            ];
+            out.extend(rows.into_iter().map(|(machine, product, tool, status)|
+                format!("{machine} | {product} | {tool} | {status}")));
+            Ok(out)
         }
         DbOperation::Count(table) => {
             // Validated unquoted identifiers only; never build raw SQL from
@@ -480,6 +512,16 @@ impl eframe::App for MicsApp {
                     self.start_db(DbOperation::Count(self.selected.trim().to_string()));
                 }
             });
+            ui.separator();
+            ui.horizontal(|ui| {
+                if ui.add_enabled(!self.busy && !self.updating, egui::Button::new("Lịch máy (SCHEDULE)")).clicked() {
+                    self.start_db(DbOperation::ScheduleNow);
+                }
+                if ui.add_enabled(!self.busy && !self.updating, egui::Button::new("Cột khuôn (TOOL)")).clicked() {
+                    self.start_db(DbOperation::ToolColumns);
+                }
+            });
+            ui.small("MACHINESEQ=1 là lịch dự kiến, chưa chứng minh máy đang chạy. Chưa tự ghép TOOL khi chưa biết khóa.");
             ui.separator();
             ui.label(&self.status);
             ui.horizontal(|ui| {
