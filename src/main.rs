@@ -295,24 +295,31 @@ fn query_db(cfg: &Settings, password: &str, op: DbOperation) -> Result<Vec<Strin
             Ok(out)
         }
         DbOperation::ScheduleNow => {
-            // MACHINESEQ=1 is a *schedule* heuristic, not proof of machine activity.
-            // Avoid interpreting STATUS without first verifying its meaning in MICS.
-            let rows: Vec<(String, String, String, String)> = conn.query(
-                "SELECT TRIM(CAST(MACHINENO AS VARCHAR(24))), \
-                        COALESCE(TRIM(CAST(PARTSNAME AS VARCHAR(255))), ''), \
-                        COALESCE(TRIM(CAST(TOOLENTRYNO AS VARCHAR(24))), ''), \
-                        COALESCE(TRIM(CAST(STATUS AS VARCHAR(16))), '') \
-                 FROM SCHEDULE \
-                 WHERE MACHINESEQ = 1 AND COALESCE(DELETEFLG, 0) = 0 \
-                 ORDER BY MACHINENO", ()
+            // Confirmed from exported data:
+            // SCHEDULE.TOOLENTRYNO references TOOL.ENTRYNO.
+            // MACHINESEQ=1 is the head of the *schedule*, not a live run sensor.
+            let rows: Vec<(String, String, String, String, String, String, String)> = conn.query(
+                "SELECT TRIM(CAST(S.MACHINENO AS VARCHAR(24))), \
+                        COALESCE(TRIM(CAST(S.PARTSNAME AS VARCHAR(255))), ''), \
+                        COALESCE(TRIM(CAST(S.TOOLENTRYNO AS VARCHAR(24))), ''), \
+                        COALESCE(TRIM(CAST(S.STATUS AS VARCHAR(16))), ''), \
+                        COALESCE(TRIM(CAST(T.TOOLNO AS VARCHAR(80))), ''), \
+                        COALESCE(TRIM(CAST(T.TOOLNAME AS VARCHAR(255))), ''), \
+                        COALESCE(TRIM(CAST(S.MORDERNO AS VARCHAR(40))), '') \
+                 FROM SCHEDULE S \
+                 LEFT JOIN TOOL T ON T.ENTRYNO = S.TOOLENTRYNO \
+                 WHERE S.MACHINESEQ = 1 AND COALESCE(S.DELETEFLG, 0) = 0 \
+                 ORDER BY S.MACHINENO", ()
             ).map_err(|e| e.to_string())?;
             let mut out = vec![
-                format!("SCHEDULE: {} công việc đầu tiên theo máy", rows.len()),
-                "CHƯA XÁC NHẬN ĐANG CHẠY: cần giải mã STATUS và đối chiếu dữ liệu thực tế.".to_owned(),
-                "MACHINE | PARTSNAME | TOOLENTRYNO | STATUS".to_owned()
+                format!("SCHEDULE + TOOL: {} máy có công việc đầu tiên trong lịch", rows.len()),
+                "LỊCH DỰ KIẾN: STATUS chưa được xác nhận là trạng thái chạy thực tế.".to_owned(),
+                "MÁY | TÊN KHUÔN | MÃ KHUÔN | SẢN PHẨM | STATUS | LỆNH SX | TOOLENTRYNO".to_owned(),
             ];
-            out.extend(rows.into_iter().map(|(machine, product, tool, status)|
-                format!("{machine} | {product} | {tool} | {status}")));
+            out.extend(rows.into_iter().map(|(machine, product, entry, status, tool_no, tool_name, order)| {
+                let mold = if tool_name.is_empty() { "(chưa có khuôn trong TOOL)" } else { tool_name.as_str() };
+                format!("{machine} | {mold} | {tool_no} | {product} | {status} | {order} | {entry}")
+            }));
             Ok(out)
         }
         DbOperation::Count(table) => {
@@ -514,14 +521,14 @@ impl eframe::App for MicsApp {
             });
             ui.separator();
             ui.horizontal(|ui| {
-                if ui.add_enabled(!self.busy && !self.updating, egui::Button::new("Lịch máy (SCHEDULE)")).clicked() {
+                if ui.add_enabled(!self.busy && !self.updating, egui::Button::new("Máy và khuôn (SCHEDULE + TOOL)")).clicked() {
                     self.start_db(DbOperation::ScheduleNow);
                 }
                 if ui.add_enabled(!self.busy && !self.updating, egui::Button::new("Cột khuôn (TOOL)")).clicked() {
                     self.start_db(DbOperation::ToolColumns);
                 }
             });
-            ui.small("MACHINESEQ=1 là lịch dự kiến, chưa chứng minh máy đang chạy. Chưa tự ghép TOOL khi chưa biết khóa.");
+            ui.small("Ghép TOOL.ENTRYNO = SCHEDULE.TOOLENTRYNO. MACHINESEQ=1 chỉ là lịch dự kiến; chưa phải xác nhận đang chạy.");
             ui.separator();
             ui.label(&self.status);
             ui.horizontal(|ui| {
