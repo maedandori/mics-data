@@ -53,4 +53,4 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: pwsh
         run: |
-          gh release create "v0.2.1" target/release/mics-data.exe target/release/mics-data.exe.sha256 --target "${{ github.sha }}" --title "v0.2.1" --notes "Fix Vietnamese and Japanese UI font fallback"
+          gh release create "v0.2.2" target/release/mics-data.exe target/release/mics-data.exe.sha256 --target "${{ github.sha }}" --title "v0.2.2" --notes "Portable setting.ini beside EXE and embedded Windows app icon"
