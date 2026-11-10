@@ -1,0 +1,30 @@
+name: Build MICS Data Windows
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "src/**"
+      - ".github/workflows/build-windows.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+      - name: Build Windows executable
+        run: cargo build --release --locked
+      - name: Upload EXE
+        uses: actions/upload-artifact@v4
+        with:
+          name: mics-data-windows-x64
+          path: target/release/mics-data.exe
+          if-no-files-found: error
