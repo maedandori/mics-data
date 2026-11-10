@@ -597,7 +597,7 @@ fn send_mics_snapshot(cfg: &Settings, nodes: &[MachineNode]) -> Result<(), Strin
             "qty_plan":qty_plan,"qty_ok":qty_ok,"qty_ng":parse_qty(&n.bad),
             "qty_remaining":(qty_plan-qty_ok).max(0),
             "cycle_seconds":n.cycle.trim().parse::<f64>().ok(),
-            "staff_name":n.staff
+            "staff_name":"" // No employee personal data is uploaded
         })
     }).collect();
     let payload=serde_json::json!({
