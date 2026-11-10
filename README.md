@@ -55,3 +55,28 @@ The first screen shows 14 machine nodes, read directly from Firebird without any
 - Multiple matching schedules per machine are marked ambiguous, not silently selected.
 
 **Deployment note:** Version v0.3.0 code has not been validated against the live company Firebird server. Verify the Windows CI result and the actual database schema before trusting the live display.
+
+## One-way MICS → Cloudflare D1 sync (v0.3.1)
+
+The Windows GUI queries Firebird in **read-only** transactions. It sends only changed machine snapshots, in one HTTPS POST (14 machines per batch), to the Machine-Control Worker. The Worker stores the latest values in a separate D1 table and broadcasts a **mics-changed** message over its existing WebSocket room to logged-in viewers. No Cloudflare-to-Firebird connection is made, and MICS records are never changed.
+
+Setup (Windows, run in a Command Prompt as the same Windows user running the app):
+
+```bat
+setx MICS_SYNC_TOKEN "PASTE_THE_SHARED_TOKEN_HERE"
+```
+
+Restart MICS Data after using `setx`; existing processes do not inherit newly set environment variables. In app settings, fill in:
+
+```ini
+[firebird]
+sync_url=https://machine-control.maedandoris.workers.dev/api/integrations/mics/snapshot
+```
+
+Keep existing host/port/database/user in `setting.ini`; **do not replace the whole file with the abbreviated example**. Use the **same secret value** as Cloudflare Worker secret `MICS_SYNC_TOKEN`, configured in Cloudflare settings (never in GitHub source).
+
+In the GUI, enter the Firebird password and click **Làm mới**. After data refresh, the app attempts a POST when the snapshot hash has changed. Success and failure appear next to the dashboard status. Retries occur on subsequent refreshes (60 s) until successful. Existing data remains visible in D1 if the company PC goes offline; timestamps indicate staleness.
+
+Security: `setx` stores the token in the Windows user's environment (not an encrypted vault). Restrict Windows user access; rotate the token if exposed. Keep the token out of logs, GitHub, screenshots, and the INI. HTTPS is required. Do not expose Firebird on the public internet.
+
+At this stage, runtime validation against the real Firebird schema and Cloudflare configuration is still required.
